@@ -18,8 +18,11 @@ function isolated(fn) {
 
 test('CLI uses the same command lock for lowercase/uppercase UDID, before touching a device', () => isolated((dir, run) => {
   fs.mkdirSync(path.join(dir, 'locks', udid), { recursive: true });
+  const plan = path.join(dir, 'plan.json');
+  fs.writeFileSync(plan, JSON.stringify({ steps: [{ assert: { label: 'Ready' } }] }));
   for (const command of ['start', 'run', 'stop']) {
-    const r = run(command, '--udid', udid.toLowerCase(), '--owner', 'test');
+    const extra = command === 'run' ? ['--plan', plan] : [];
+    const r = run(command, '--udid', udid.toLowerCase(), '--owner', 'test', ...extra);
     assert.equal(r.status, 4, r.stdout + r.stderr);
   }
 }));

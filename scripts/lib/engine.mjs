@@ -410,6 +410,7 @@ export async function runPlan(plan, t) {
     if (e.code === 'paused') record.stopped_before = e.action_sent ? e.step + 1 : e.step;
     record.error = { code: e.code ?? 'tool_error', message: e.message, step: e.step ?? null };
     if (e.action_sent) record.error.action_sent = true;
+    if (e.partial) record.error.partial = true; // only part of the input was sent
     if (e.candidates) record.error.candidates = e.candidates;
   }
 
@@ -473,9 +474,15 @@ export async function runPlan(plan, t) {
         await t.swipe(pts[0], pts[1], s.swipe.ms ?? 300);
         break;
       }
-      case 'type': beginInput(); await t.typeText(String(s.type)); break;
-      case 'key': beginInput(); await t.key(String(s.key)); break;
-      case 'button': beginInput(); await t.button(String(s.button)); break;
+      case 'type':
+      case 'key':
+      case 'button':
+        if (t.paused()) throw new StepError('paused', `paused before ${s.kind} was sent`);
+        beginInput();
+        if (s.kind === 'type') await t.typeText(String(s.type));
+        else if (s.kind === 'key') await t.key(String(s.key));
+        else await t.button(String(s.button));
+        break;
       case 'wait': {
         const w = await waitFor(s.wait, s.timeout_ms ?? 5000, s.stable_ms ?? 0);
         if (!w.ok) throw failWait(w, s.wait, 'wait_timeout');

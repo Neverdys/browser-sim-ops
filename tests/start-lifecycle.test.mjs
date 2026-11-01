@@ -28,6 +28,11 @@ function fixture(fn) {
         throw Object.assign(new Error('fake exited'), { code: 'ESRCH' });
       };
       cp.execFileSync = (command, args) => {
+        if (command === 'ps') {
+          const pid = Number(args[1]);
+          if (!JSON.parse(process.env.FAKE_ALIVE).includes(pid)) throw new Error('no such process');
+          return JSON.parse(process.env.FAKE_ARGS ?? '{}')[pid] ?? 'node /fixture/serve-sim/dist/serve-sim.js --detach';
+        }
         assert.equal(command, 'xcrun');
         assert.deepEqual(args, ['simctl', 'list', 'devices', 'booted', '-j']);
         return JSON.stringify({ devices: { fixture: [{ udid: '${udid}', state: 'Booted' }] } });

@@ -1,6 +1,6 @@
 {
   "name": "browser-sim-ops",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Agent skill: fewer screenshots and round trips for browser and iOS Simulator operations, without skipping verification.",
   "type": "module",
