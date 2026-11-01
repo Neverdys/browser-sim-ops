@@ -123,24 +123,49 @@ const HID = (() => {
 const KEYS = { enter: 40, return: 40, escape: 41, backspace: 42, delete: 42, tab: 43, space: 44 };
 
 async function openTransport(h, pausePath) {
-  const ws = new WebSocket(h.wsUrl);
-  ws.binaryType = 'arraybuffer';
-  await new Promise((res, rej) => {
-    const timer = setTimeout(() => { ws.close(); rej(new Error('websocket connect timeout')); }, 5000);
-    ws.onopen = () => { clearTimeout(timer); res(); };
-    ws.onerror = () => { clearTimeout(timer); ws.close(); rej(new Error(`websocket connect failed: ${h.wsUrl}`)); };
-  });
-  let closed = false;
-  ws.onclose = () => { closed = true; };
+  let ws, timer, rejectConnect;
+  let closed = false, signalled = false;
+  const onSig = () => {
+    signalled = true;
+    rejectConnect?.(Object.assign(new StepError('paused', 'paused while connecting to serve-sim'), { exit: EXIT.paused }));
+  };
+  const close = () => {
+    process.off('SIGINT', onSig); process.off('SIGTERM', onSig);
+    if (ws) {
+      ws.onopen = ws.onerror = ws.onclose = null;
+      try { ws.close(); } catch {}
+    }
+  };
+  // Interruption must unwind the enclosing command lock even before the
+  // socket opens. A hard process kill still leaves the conservative lock.
+  process.on('SIGINT', onSig); process.on('SIGTERM', onSig);
+  try {
+    ws = new WebSocket(h.wsUrl);
+    ws.binaryType = 'arraybuffer';
+    await new Promise((res, rej) => {
+      rejectConnect = rej;
+      timer = setTimeout(() => rej(new Error('websocket connect timeout')), 5000);
+      ws.onopen = res;
+      ws.onerror = () => rej(new Error(`websocket connect failed: ${h.wsUrl}`));
+      ws.onclose = () => {
+        closed = true;
+        rejectConnect?.(new Error('websocket closed while connecting'));
+      };
+    });
+  } catch (e) {
+    close();
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    rejectConnect = null;
+    if (ws) ws.onopen = ws.onerror = null;
+  }
   const send = (type, obj) => {
     if (closed || ws.readyState !== WebSocket.OPEN) throw new StepError('connection_lost', 'serve-sim connection closed');
     const b = new TextEncoder().encode(JSON.stringify(obj));
     const msg = new Uint8Array(1 + b.length); msg[0] = type; msg.set(b, 1);
     ws.send(msg);
   };
-  let signalled = false;
-  const onSig = () => { signalled = true; };
-  process.on('SIGINT', onSig); process.on('SIGTERM', onSig);
   const getJson = async p => {
     const r = await fetch(`${h.http}${p}`, { signal: AbortSignal.timeout(10000) });
     if (!r.ok) throw new StepError('tool_error', `${p} HTTP ${r.status}`);
@@ -171,7 +196,7 @@ async function openTransport(h, pausePath) {
     paused: () => signalled || fs.existsSync(pausePath) || (process.env.SIMOPS_PAUSE_FILE ? fs.existsSync(process.env.SIMOPS_PAUSE_FILE) : false),
     now: () => performance.now(),
     sleep,
-    close: () => { process.off('SIGINT', onSig); process.off('SIGTERM', onSig); try { ws.close(); } catch {} },
+    close,
   };
 }
 
@@ -302,7 +327,7 @@ async function cmdRun(o) {
   try {
     fs.appendFileSync(path.join(stateDir(), 'runs.jsonl'), JSON.stringify({
       at: new Date().toISOString(), udid: o.udid, owner: o.owner, status: result.status, total_ms: result.total_ms,
-      ax_reads: result.ax_reads, actions: result.actions, error: result.error?.code ?? null,
+      ax_reads: result.ax_reads, actions: result.actions, actions_attempted: result.actions_attempted, error: result.error?.code ?? null,
       steps: result.steps.map(s => ({ i: s.i, kind: s.kind, ms: s.ms })),
     }) + '\n', { mode: 0o600 });
   } catch { /* logging is best effort */ }

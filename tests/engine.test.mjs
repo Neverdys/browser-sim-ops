@@ -46,6 +46,7 @@ test('runs known steps and observes once at the end', async () => {
   assert.equal(r.status, 'ok');
   assert.deepEqual(d.log, [['tap', 'Next'], ['tap', 'Back']]);
   assert.equal(r.actions, 2);
+  assert.equal(r.actions_attempted, 2);
   assert.ok(r.final.elements.some(l => l.startsWith('Button|Next')));
 });
 
@@ -156,6 +157,39 @@ test('a commit that fails before sending stays failed', async () => {
   assert.equal(r.error.code, 'not_found');
   assert.equal(d.log.length, 0);
 });
+
+for (const [method, action] of [
+  ['tap', { tap: { label: 'Before' } }],
+  ['swipe', { swipe: { from: [20, 200], to: [20, 100] } }],
+  ['typeText', { type: 'a' }], ['key', { key: 'enter' }], ['button', { button: 'home' }],
+]) {
+  for (const unreadable of [false, true]) {
+    test(`${method} may change UI before throwing: final observation is fresh or unavailable (${unreadable})`, async () => {
+      const d = fakeDevice({ screens: { home: tree(node('Before')) }, start: 'home' });
+      let attempted = 0;
+      const originalRead = d.readAx;
+      d.readAx = async () => {
+        if (!attempted) return originalRead();
+        if (unreadable) throw new Error('AX unavailable after input');
+        return tree(node('Current', { type: 'Alert' }), node('Before'));
+      };
+      d[method] = async () => { attempted++; throw new Error('connection lost after input'); };
+      const r = await runPlan({ udid: 'U', summary_limit: 1, steps: [
+        { assert: { label: 'Before' } },
+        { ...action, commit: true, expect: { label: 'Done' } },
+        { assert: { label: 'must not run' } },
+      ] }, d);
+      assert.equal(r.status, 'unknown');
+      assert.match(r.error.message, /do NOT resend/);
+      assert.equal(attempted, 1);
+      assert.equal(r.steps.length, 2);
+      if (unreadable) assert.deepEqual(r.final, { error: 'AX unavailable after input' });
+      else assert.match(r.final.elements[0], /^Alert\|Current/);
+      assert.equal(r.actions, 0);
+      assert.equal(r.actions_attempted, 1);
+    });
+  }
+}
 
 test('mixed foreground and UI conditions are rejected before any input', async () => {
   for (const kind of ['expect', 'wait', 'assert']) {

@@ -282,11 +282,19 @@ export function validatePlan(plan) {
 export async function runPlan(plan, t) {
   const steps = validatePlan(plan);
   const started = t.now();
-  const record = { status: 'ok', steps: [], ax_reads: 0, ax_invalid_reads: 0, ax_ms: 0, actions: 0, warnings: [] };
+  const record = { status: 'ok', steps: [], ax_reads: 0, ax_invalid_reads: 0, ax_ms: 0, actions: 0, actions_attempted: 0, warnings: [] };
   const axReadyMs = plan.ax_ready_ms ?? 5000;
   let snap = null; // latest VALID snapshot, reused until something acts
   let sent = false; // an input event of the current step may have reached the device
   let focus = null; // conditions last observed as satisfied; shown first in the summary
+  const beginInput = () => {
+    sent = true;
+    record.actions_attempted++;
+    // Transport may send only part of an input before throwing. Neither the
+    // old screen nor its satisfied conditions remain current in that case.
+    snap = null;
+    focus = null;
+  };
 
   // One AX read. An invalid tree (no screen frame) throws bad_snapshot and
   // never replaces the last valid snapshot.
@@ -451,7 +459,7 @@ export async function runPlan(plan, t) {
         }
         if (!(nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1)) throw new StepError('offscreen', 'tap point outside screen');
         if (t.paused()) throw new StepError('paused', 'paused before tap was sent');
-        sent = true;
+        beginInput();
         await t.tap(nx, ny);
         break;
       }
@@ -461,13 +469,13 @@ export async function runPlan(plan, t) {
         const pts = [norm(s.swipe.from), norm(s.swipe.to)];
         if (pts.flat().some(v => !(v >= 0 && v <= 1))) throw new StepError('offscreen', 'swipe point outside screen');
         if (t.paused()) throw new StepError('paused', 'paused before swipe was sent');
-        sent = true;
+        beginInput();
         await t.swipe(pts[0], pts[1], s.swipe.ms ?? 300);
         break;
       }
-      case 'type': sent = true; await t.typeText(String(s.type)); break;
-      case 'key': sent = true; await t.key(String(s.key)); break;
-      case 'button': sent = true; await t.button(String(s.button)); break;
+      case 'type': beginInput(); await t.typeText(String(s.type)); break;
+      case 'key': beginInput(); await t.key(String(s.key)); break;
+      case 'button': beginInput(); await t.button(String(s.button)); break;
       case 'wait': {
         const w = await waitFor(s.wait, s.timeout_ms ?? 5000, s.stable_ms ?? 0);
         if (!w.ok) throw failWait(w, s.wait, 'wait_timeout');
@@ -482,7 +490,6 @@ export async function runPlan(plan, t) {
         return;
       }
     }
-    record.actions++;
-    snap = null; // the screen may have changed
+    record.actions++; // transport completed; business outcome still needs observation
   }
 }
